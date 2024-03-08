@@ -178,3 +178,20 @@ class ReplayMemory():
     return state
 
   next = __next__  # Alias __next__ for Python 2 compatibility
+  
+class ReplayMemoryWithNestedStates(ReplayMemory):
+  # Return valid states for validation
+  def __next__(self):
+    if self.current_idx == self.capacity:
+      raise StopIteration
+    transitions = self.transitions.data[np.arange(self.current_idx - self.history + 1, self.current_idx + 1)]
+    transitions_firsts = transitions['timestep'] == 0
+    blank_mask = np.zeros_like(transitions_firsts, dtype=np.bool_)
+    for t in reversed(range(self.history - 1)):
+      blank_mask[t] = np.logical_or(blank_mask[t + 1], transitions_firsts[t + 1]) # If future frame has timestep 0
+    transitions[blank_mask] = blank_trans
+    images = torch.tensor(transitions['state']['images'], dtype=torch.float32, device=self.device).div_(255)  # Agent will turn into batch
+    is_first = torch.tensor(transitions['state']['is_first'], dtype=bool, device=self.device)
+    state = {"images":images, "is_first":is_first}
+    self.current_idx += 1
+    return state

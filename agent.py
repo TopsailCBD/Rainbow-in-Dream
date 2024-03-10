@@ -8,7 +8,7 @@ from torch.nn.utils import clip_grad_norm_
 
 import sys
 import pathlib
-import ruamel.yaml as yaml
+# import ruamel.yaml as yaml
 import argparse
 
 from model import DQN, DQNWithWMFeature
@@ -129,15 +129,13 @@ class Agent():
     
 class AgentWithWMFeature(Agent):
   def __init__(self, args, env):
-    super().__init__(args, env)
     self.env = env
+    super().__init__(args, env)
     self.update_interval = 5
-    self._build_world_model()
-    self._init_world_model_dataset()
     
     
   def _build_online_net(self, args):
-    self.online_net = DQNWithWMFeature(args, self.action_space, self.wm_feature_dim).to(device=args.device)
+    self.online_net = DQNWithWMFeature(args, self.action_space, self.env.wm_feature_dim).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
         state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
@@ -152,7 +150,7 @@ class AgentWithWMFeature(Agent):
 
     self.online_net.train()
 
-    self.target_net = DQNWithWMFeature(args, self.action_space, self.wm_feature_dim).to(device=args.device)
+    self.target_net = DQNWithWMFeature(args, self.action_space, self.env.wm_feature_dim).to(device=args.device)
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():

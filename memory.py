@@ -2,6 +2,7 @@
 from __future__ import division
 import numpy as np
 import torch
+import pdb
 
 
 Transition_dtype = np.dtype([('timestep', np.int32), ('state', np.uint8, (84, 84)), ('action', np.int32), ('reward', np.float32), ('nonterminal', np.bool_)])
@@ -54,6 +55,7 @@ class SegmentTree():
     self.max = max(value, self.max)
 
   def append(self, data, value):
+    pdb.set_trace()
     self.data[self.index] = data  # Store data in underlying data structure
     self._update_index(self.index + self.tree_start, value)  # Update tree
     self.index = (self.index + 1) % self.size  # Update index
@@ -180,6 +182,16 @@ class ReplayMemory():
   next = __next__  # Alias __next__ for Python 2 compatibility
   
 class ReplayMemoryWithNestedStates(ReplayMemory):
+  # Adds state and action at time t, reward and terminal at time t + 1
+  def append(self, state, action, reward, terminal):
+    state = {
+      "image": state["image"][-1].mul(255).to(dtype=torch.uint8, device=torch.device('cpu')),
+      "is_first": state["is_first"]
+    } # Only store last frame and discretise to save memory
+    # state = state[-1].mul(255).to(dtype=torch.uint8, device=torch.device('cpu'))  
+    self.transitions.append((self.t, state, action, reward, not terminal), self.transitions.max)  # Store new transition with maximum priority
+    self.t = 0 if terminal else self.t + 1  # Start new episodes with t = 0
+    
   # Return valid states for validation
   def __next__(self):
     if self.current_idx == self.capacity:

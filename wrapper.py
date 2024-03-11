@@ -14,7 +14,7 @@ import ruamel.yaml as yaml
 # import argparse
 from attrdict import AttrDict
 
-
+from model import *
 
 from env import Env
 from dreamer.models import *
@@ -22,7 +22,7 @@ from dreamer import tools
   
 
 class DreamerWrapper:
-  def __init__(self, env:Env):
+  def __init__(self, env:Env, args):
     
     self._env = env
     # if wrapper_args:
@@ -32,6 +32,7 @@ class DreamerWrapper:
     self.num_actions = self._env.action_space()
     self.update_interval = 5
     self.global_counter = 0
+    self._policy_encoder = AtariEncoder(args) # TODO: Test what if using the same encoder as dreamer
     self._build_world_model()
     self._init_world_model_dataset()
     
@@ -138,14 +139,14 @@ class DreamerWrapper:
   #     # wm_is_first[:] = 0
   #     return wm_embed, wm_feature
     
-  def _get_world_model_feat(self,wm_obs, wm_action):
+  def _get_world_model_feat(self,wm_obs, wm_action,wm_is_first):
     # world model obs step
     wm_embed = self._world_model.encoder(wm_obs)
     wm_latent, _ = self._world_model.dynamics.obs_step(wm_latent, wm_action, wm_embed,
-                                                        wm_obs["is_first"])
+                                                        wm_is_first)
     wm_feature = self._world_model.dynamics.get_feat(wm_latent)
     # wm_is_first[:] = 0
-    return wm_embed, wm_feature
+    return wm_feature
   
   def update_wm_buffer(self,state,action,reward,done):
     self.wm_obs = {
@@ -153,7 +154,7 @@ class DreamerWrapper:
       "is_first": self.wm_is_first
     }
     
-    action = torch.zeros(self.num_actions, device=self._world_model.device).scatter(0, torch.tensor(action).to(self._world_model.device), 1)
+    action = torch.zeros(self.num_actions, device=self._world_model.device).scatter(0, torch.tensor(action).to(self._world_model.device), 1) # action: int to one-hot
     self.wm_action_history = torch.concat(
           (self.wm_action_history[1:], action.unsqueeze(0)), dim=0)
     
@@ -182,25 +183,30 @@ class DreamerWrapper:
       "image":policy_state.to(self._world_model.device),
       "is_first": self.wm_is_first
     }
+    self.wm_action_history = torch.zeros_like(self.wm_action_history)
     
-    return self.wm_obs.copy()
+    wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
     
-  def step(self, action):  
-    # concat world model input with previous input
+    return torch.cat((self._policy_encoder(policy_state), wm_feat), dim=1)
     
+  def step(self, action):      
     # get world model input
     state, reward, done = self._env.step(action)
     
     # update world model buffer
     self.update_wm_buffer(state,action,reward,done)
 
+    policy_state = self._policy_encoder(state)
+    wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
+    policy_state = torch.cat((policy_state, wm_feat), dim=1)
+    
     # update action history
     info = {}
-    info["action"] = self.wm_action_history.flatten(1)
+    # info["action"] = self.wm_action_history.flatten(1)
     
     self.global_counter += 1
     # return policy_state, reward, done, info
-    return self.wm_obs.copy(), reward, done, info
+    return policy_state, reward, done, info
   
   def learn_world_model(self, it):
     # Train World Model

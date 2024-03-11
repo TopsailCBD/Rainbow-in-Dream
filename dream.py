@@ -11,9 +11,9 @@ import numpy as np
 import torch
 from tqdm import trange
 
-from agent import Agent, AgentWithWMFeature
+from agent import Agent, AgentWithWMFeature, AgentWithoutEncoder
 from env import Env
-from memory import ReplayMemory, ReplayMemoryWithNestedStates
+from memory import ReplayMemory, ReplayMemoryWithInfo
 from test import test
 from wrapper import DreamerWrapper
 
@@ -109,7 +109,7 @@ env.train()
 action_space = env.action_space()
 
 # Agent
-dqn = AgentWithWMFeature(args, env)
+dqn = AgentWithoutEncoder(args, env)
 
 # If a model is provided, and evaluate is false, presumably we want to resume, so try to load memory
 if args.model is not None and not args.evaluate:
@@ -121,13 +121,13 @@ if args.model is not None and not args.evaluate:
   mem = load_memory(args.memory, args.disable_bzip_memory)
 
 else:
-  mem = ReplayMemoryWithNestedStates(args, args.memory_capacity)
+  mem = ReplayMemoryWithInfo(args, args.memory_capacity)
 
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
 
 
 # Construct validation memory
-val_mem = ReplayMemoryWithNestedStates(args, args.evaluation_size)
+val_mem = ReplayMemoryWithInfo(args, args.evaluation_size)
 T, done = 0, True
 while T < args.evaluation_size:
   if done:
@@ -158,21 +158,34 @@ else:
     action = info["action"]
     if args.reward_clip > 0:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
+    
+    action = env.wm_action_history.flatten(1)
     mem.append(state, action, reward, done)  # Append transition to memory
 
     # Train and test
     if T >= args.learn_start:
       mem.priority_weight = min(mem.priority_weight + priority_weight_increase, 1)  # Anneal importance sampling weight β to 1
 
-      if T % args.replay_frequency == 0:
-        dqn.learn(mem)  # Train with n-step distributional double-Q learning
+      if T % args.replay_frequency == 0: # TODO: test what if policy_encoder and world_model are updated consistently
+        env._policy_encoder.train()
+        env._world_model.eval()
+        dqn.learn(mem)  # Train with n-step distributional double-Q learning+
+        
+        env._policy_encoder.eval()
+        env._world_model.train()
         env.learn_world_model(T)
         
       if T % args.evaluation_interval == 0:
         dqn.eval()  # Set DQN (online network) to evaluation mode
+        env._policy_encoder.eval()
+        env._world_model.eval()
+        
         avg_reward, avg_Q = test(args, T, dqn, val_mem, metrics, results_dir)  # Test
         log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
+        
         dqn.train()  # Set DQN (online network) back to training mode
+        env._policy_encoder.train()
+        env._world_model.train()
 
         # If memory path provided, save it
         if args.memory is not None:

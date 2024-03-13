@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import re
+import pdb
 
 import torch
 from torch import nn
@@ -235,8 +236,9 @@ class RSSM(nn.Module):
     def get_stoch(self, deter):
         x = self._img_out_layers(deter)
         stats = self._suff_stats_layer("ims", x)
+        # pdb.set_trace()
         dist = self.get_dist(stats)
-        return dist.mode()
+        return dist.base_dist.mode()
 
     def _suff_stats_layer(self, name, x):
         if self._discrete:

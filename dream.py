@@ -103,7 +103,7 @@ def save_memory(memory, memory_path, disable_bzip):
 
 # Environment
 env = Env(args)
-env = DreamerWrapper(env)
+env = DreamerWrapper(env, args)
 
 env.train()
 action_space = env.action_space()
@@ -134,7 +134,8 @@ while T < args.evaluation_size:
     state = env.reset()
 
   next_state, _reward, done, _info = env.step(np.random.randint(0, action_space))
-  val_mem.append(state, -1, 0.0, done)
+  _action = env.wm_action_history.flatten(1).detach().cpu()
+  val_mem.append(state.detach().cpu(), -1, 0.0, done)
   state = next_state
   T += 1
 
@@ -159,8 +160,8 @@ else:
     if args.reward_clip > 0:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
     
-    action = env.wm_action_history.flatten(1)
-    mem.append(state, action, reward, done)  # Append transition to memory
+    action = env.wm_action_history.flatten(1).detach().cpu()
+    mem.append(state.detach().cpu(), action, reward, done)  # Append transition to memory
 
     # Train and test
     if T >= args.learn_start:

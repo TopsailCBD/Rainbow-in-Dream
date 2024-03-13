@@ -32,8 +32,8 @@ class DreamerWrapper:
     self.num_actions = self._env.action_space()
     self.update_interval = 5
     self.global_counter = 0
-    self._policy_encoder = AtariEncoder(args) # TODO: Test what if using the same encoder as dreamer
     self._build_world_model()
+    self._policy_encoder = AtariEncoder(args).to(self._world_model.device) # TODO: Test what if using the same encoder as dreamer
     self._init_world_model_dataset()
     
   def _build_world_model(self,headless=True,sim_device='cuda:0'):
@@ -71,7 +71,7 @@ class DreamerWrapper:
     self.wm_config.num_actions = self.wm_config.num_actions * self.update_interval
     # prop_dim = self.env.num_obs - self.env.privileged_dim - self.env.height_dim - self.env.num_actions
     # image_shape = self.env.cfg.depth.resized + (1,)
-    image_shape = (84,84,1)
+    image_shape = (self._env.window,84,84)
     obs_shape = {'image': image_shape}
 
     self._world_model = WorldModel(self.wm_config, obs_shape, use_camera=True)
@@ -79,19 +79,19 @@ class DreamerWrapper:
     print('Finish construct world model')
     
     self.wm_feature_dim = self.wm_config.dyn_deter + self.wm_config.dyn_stoch * self.wm_config.dyn_discrete
-    
+    self.wm_latent = None
 
   def _init_world_model_dataset(self):
     # init world model input
     self.step_in_wm_dataset = 0
     
-    self.wm_is_first = torch.scalar_tensor(False,device=self._world_model.device)
+    self.wm_is_first = torch.ones(1,device=self._world_model.device)
     
     self.wm_obs = {
-      "image": torch.zeros((84,84,self._env.window), device=self._world_model.device),
+      "image": torch.zeros((1,self._env.window,84,84), device=self._world_model.device),
       "is_first": self.wm_is_first
     }
-
+    print('In init:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
 
     # wm_metrics = None
     self.wm_action_history = torch.zeros(size=(self.update_interval, self.num_actions),
@@ -139,12 +139,13 @@ class DreamerWrapper:
   #     # wm_is_first[:] = 0
   #     return wm_embed, wm_feature
     
-  def _get_world_model_feat(self,wm_obs, wm_action,wm_is_first):
+  def _get_world_model_feat(self,wm_obs, wm_action):
     # world model obs step
+    # pdb.set_trace()
     wm_embed = self._world_model.encoder(wm_obs)
-    wm_latent, _ = self._world_model.dynamics.obs_step(wm_latent, wm_action, wm_embed,
-                                                        wm_is_first)
-    wm_feature = self._world_model.dynamics.get_feat(wm_latent)
+    self.wm_latent, _ = self._world_model.dynamics.obs_step(self.wm_latent, wm_action, wm_embed,
+                                                        wm_obs["is_first"])
+    wm_feature = self._world_model.dynamics.get_feat(self.wm_latent).to(self._world_model.device)
     # wm_is_first[:] = 0
     return wm_feature
   
@@ -158,7 +159,7 @@ class DreamerWrapper:
     self.wm_action_history = torch.concat(
           (self.wm_action_history[1:], action.unsqueeze(0)), dim=0)
     
-    self.wm_is_first = False
+    self.wm_is_first = torch.zeros(1, device=self._world_model.device)
     
     # pdb.set_trace()
     self.wm_buffer["image"][self.wm_buffer_index] = state
@@ -177,24 +178,30 @@ class DreamerWrapper:
   
   def reset(self):
   
-    policy_state =  self._env.reset()
-    self.wm_is_first = True
+    policy_state =  self._env.reset().unsqueeze(0)
+    self.wm_is_first = torch.ones(1)
     self.wm_obs = {
       "image":policy_state.to(self._world_model.device),
       "is_first": self.wm_is_first
     }
+    print('In reset:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
+    
     self.wm_action_history = torch.zeros_like(self.wm_action_history)
     
+    policy_feat = self._policy_encoder(policy_state)
     wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
     
-    return torch.cat((self._policy_encoder(policy_state), wm_feat), dim=1)
+    # pdb.set_trace()
+    return torch.cat((policy_feat, wm_feat), dim=1)
     
   def step(self, action):      
     # get world model input
     state, reward, done = self._env.step(action)
+    state = state.unsqueeze(0)
     
     # update world model buffer
     self.update_wm_buffer(state,action,reward,done)
+    print('In step:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
 
     policy_state = self._policy_encoder(state)
     wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
@@ -202,7 +209,9 @@ class DreamerWrapper:
     
     # update action history
     info = {}
-    # info["action"] = self.wm_action_history.flatten(1)
+    info["is_first"] = self.wm_is_first.item()
+    info["wm_action"] = self.wm_action_history.flatten(1).detach().cpu()
+    info["wm_feat"] = wm_feat.detach().cpu()
     
     self.global_counter += 1
     # return policy_state, reward, done, info

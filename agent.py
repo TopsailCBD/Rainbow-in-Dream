@@ -10,6 +10,7 @@ import sys
 import pathlib
 # import ruamel.yaml as yaml
 import argparse
+import pdb
 
 from model import *
 
@@ -209,6 +210,11 @@ class AgentWithWMFeature(Agent):
     self.env.learn_world_model()
     
 class AgentWithoutEncoder(Agent):
+  def __init__(self, args, env):
+    self.env = env
+    super().__init__(args, env)
+    self._use_sampled_feature = False
+    
   def _build_online_net(self, args):
     self.online_net = DQNWithoutEncoder(args, self.action_space, self.env.wm_feature_dim).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -233,16 +239,27 @@ class AgentWithoutEncoder(Agent):
       
   def learn(self, mem):
     # Sample transitions
-    idxs, states, actions, returns, next_states, nonterminals, weights, firsts = mem.sample(self.batch_size)
+    # wm_features is off-world-model feature, i.e. calculated when the transition is sampled (old world model)
+    # wm_actions is action history.
+    idxs, states, actions, returns, next_states, nonterminals, weights, firsts, wm_features, wm_actions = mem.sample(self.batch_size)
     
     # Calculate current state probabilities (online network noise already sampled)
+    wm_obs = {
+      "image": states,
+      "is_first": firsts
+    }
+    # wm_actions = actions
     
-    embed, feat = self.env._get_world_model_feat(states, actions, firsts)
+    if self._use_sampled_feature:
+      feat = wm_features
+    else:
+      feat = self.env._get_world_model_feat(wm_obs, wm_actions)
     
+    pdb.set_trace()
     actions = actions.view(actions.shape[0], self.env.update_interval, -1)
     actions = actions[:, -1, :].squeeze(1)
     
-    log_ps = self.online_net(states, embed, log=True)  # Log probabilities log p(s_t, ·; θonline)
+    log_ps = self.online_net(states, feat, log=True)  # Log probabilities log p(s_t, ·; θonline)
     log_ps_a = log_ps[range(self.batch_size), actions]  # log p(s_t, a_t; θonline)
 
     with torch.no_grad():

@@ -4,6 +4,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+import pdb
 
 
 # Factorised NoisyLinear layer with bias
@@ -101,14 +102,16 @@ class AtariEncoder(nn.Module):
       self.conv_output_size = 576
 
   def forward(self,x):
+        
     x = self.convs(x)
     x = x.view(-1, self.conv_output_size)
+    
     return x
     
 
 class DQNWithoutEncoder(nn.Module):
   def __init__(self, args, action_space, feature_dim):
-    super(DQN, self).__init__()
+    super(DQNWithoutEncoder, self).__init__()
     self.atoms = args.atoms
     self.action_space = action_space
 

@@ -55,7 +55,6 @@ class SegmentTree():
     self.max = max(value, self.max)
 
   def append(self, data, value):
-    pdb.set_trace()
     self.data[self.index] = data  # Store data in underlying data structure
     self._update_index(self.index + self.tree_start, value)  # Update tree
     self.index = (self.index + 1) % self.size  # Update index
@@ -183,32 +182,35 @@ class ReplayMemory():
   
 class ReplayMemoryWithInfo(ReplayMemory): 
   def __init__(self, args, capacity, transition_dtype=transition_dtype, blank_trans=blank_trans):
+    # only affects what is in transition: sampled by 
     self.transition_dtype = np.dtype([
       ('timestep', np.int32), 
-      ('state', np.uint8, (84, 84)), 
+      ('state', np.float32, (2112,)), 
+      ('rawstate', np.uint8, (84, 84)),
       ('action', np.int32), 
       ('reward', np.float32), 
       ('nonterminal', np.bool_), 
       ("isfirst", np.bool_), 
-      ("wmaction", np.float32, (30,)),
-      ("wmfeature", np.float32, (1536,))
+      # ("wmfeature", np.float32, (1536,)),
+      # ("wmaction", np.float32, (30,)),
       ],)
     self.blank_trans = (
       0, 
-      np.zeros((84, 84), dtype=np.uint8), 
+      np.zeros((2112,), dtype=np.float32), 
+      np.zeros((84, 84), dtype=np.uint8),
       0, 
       0.0, 
       False,
       False,
-      np.zeros((30), dtype=np.float32),
-      np.zeros((1536), dtype=np.float32),
+      # np.zeros((1536), dtype=np.float32),
+      # np.zeros((30), dtype=np.float32),
     )
     super().__init__(args, capacity, self.transition_dtype, self.blank_trans)
   
   # Adds state and action at time t, reward and terminal at time t + 1
-  def append(self, state, action, reward, terminal, info):
-    # state = state[-1].mul(255).to(dtype=torch.uint8, device=torch.device('cpu'))  
-    self.transitions.append((self.t, state, action, reward, not terminal, info["is_first"], info["wm_action"],info["is_first"]), self.transitions.max)  # Store new transition with maximum priority
+  def append(self, state, raw_state, action, reward, terminal, info):
+    raw_state = raw_state[0,-1].mul(255).to(dtype=torch.uint8, device=torch.device('cpu')) # (1,4,H,W) -> (H,W)
+    self.transitions.append((self.t, state, raw_state, action, reward, not terminal, info["is_first"]), self.transitions.max)  # Store new transition with maximum priority
     self.t = 0 if terminal else self.t + 1  # Start new episodes with t = 0
 
   # def _get_transitions(self, idxs):
@@ -238,9 +240,14 @@ class ReplayMemoryWithInfo(ReplayMemory):
     transitions = self._get_transitions(idxs)
     # Create un-discretised states and nth next states
     
+    all_raw_states = transitions['rawstate']
+    raw_states = torch.tensor(all_raw_states[:, :self.history], device=self.device, dtype=torch.float32).div_(255)
+    next_raw_states = torch.tensor(all_raw_states[:, self.n:self.n + self.history], device=self.device, dtype=torch.float32).div_(255)
+    
     all_states = transitions['state']
-    states = torch.tensor(all_states[:, :self.history], device=self.device, dtype=torch.float32).div_(255)
-    next_states = torch.tensor(all_states[:, self.n:self.n + self.history], device=self.device, dtype=torch.float32).div_(255)
+    states = torch.tensor(all_states[:, :self.history], device=self.device, dtype=torch.float32)
+    next_states = torch.tensor(all_states[:, self.n:self.n + self.history], device=self.device, dtype=torch.float32)
+    
     # Discrete actions to be used as index
     actions = torch.tensor(np.copy(transitions['action'][:, self.history - 1]), dtype=torch.int64, device=self.device)
     # Calculate truncated n-step discounted returns R^n = Σ_k=0->n-1 (γ^k)R_t+k+1 (note that invalid nth next states have reward 0)
@@ -248,23 +255,23 @@ class ReplayMemoryWithInfo(ReplayMemory):
     R = torch.matmul(rewards, self.n_step_scaling)
     # Mask for non-terminal nth next states
     nonterminals = torch.tensor(np.expand_dims(transitions['nonterminal'][:, self.history + self.n - 1], axis=1), dtype=torch.float32, device=self.device)
-    isfirsts = torch.tensor(np.expand_dims(transitions['isfirst'][:, self.history + self.n - 1], axis=1), dtype=torch.float32, device=self.device)
+    isfirsts = torch.tensor(np.expand_dims(transitions['isfirst'][:, 0], axis=1), dtype=torch.float32, device=self.device)
     
-    wmactions = np.copy(transitions['action'][:,self.history-5:self.history])
-    if wmactions.shape[1] < 5:
-      wmactions = np.concatenate([np.zeros((wmactions.shape[0], 5 - wmactions.shape[1])), wmactions], axis=1)
-    wmactions = torch.tensor(wmactions, dtype=torch.int64, device=self.device)
+    # wmactions = np.copy(transitions['action'][:,self.history-5:self.history])
+    # if wmactions.shape[1] < 5:
+    #   wmactions = np.concatenate([np.zeros((wmactions.shape[0], 5 - wmactions.shape[1])), wmactions], axis=1)
+    # wmactions = torch.tensor(wmactions, dtype=torch.int64, device=self.device)
     
     # wmactions = torch.tensor(np.copy(transitions['wmaction'][:, self.history - 1]), dtype=torch.float32, device=self.device)
-    wmfeats = torch.tensor(np.copy(transitions['wmfeature'][:, self.history - 1]), dtype=torch.float32, device=self.device)
-    return probs, idxs, tree_idxs, states, actions, R, next_states, nonterminals, isfirsts, wmfeats, wmactions
+    
+    return probs, idxs, tree_idxs, states, actions, R, next_states, nonterminals, isfirsts, raw_states, next_raw_states
   
 
   def sample(self, batch_size):
     p_total = self.transitions.total()  # Retrieve sum of all priorities (used to create a normalised probability distribution)
-    probs, idxs, tree_idxs, states, actions, returns, next_states, nonterminals, isfirsts, wmfeats, wmactions = self._get_samples_from_segments(batch_size, p_total)  # Get batch of valid samples
+    probs, idxs, tree_idxs, states, actions, returns, next_states, nonterminals, isfirsts, raw_states, next_raw_states = self._get_samples_from_segments(batch_size, p_total)  # Get batch of valid samples
     probs = probs / p_total  # Calculate normalised probabilities
     capacity = self.capacity if self.transitions.full else self.transitions.index
     weights = (capacity * probs) ** -self.priority_weight  # Compute importance-sampling weights w
     weights = torch.tensor(weights / weights.max(), dtype=torch.float32, device=self.device)  # Normalise by max importance-sampling weight from batch
-    return tree_idxs, states, actions, returns, next_states, nonterminals, weights, isfirsts, wmfeats, wmactions
+    return tree_idxs, states, actions, returns, next_states, nonterminals, weights, isfirsts, raw_states, next_raw_states

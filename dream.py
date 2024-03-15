@@ -131,12 +131,15 @@ val_mem = ReplayMemoryWithInfo(args, args.evaluation_size)
 T, done = 0, True
 while T < args.evaluation_size:
   if done:
-    state = env.reset()
+    (state,raw_state), info = env.reset()
 
-  next_state, _reward, done, _info = env.step(np.random.randint(0, action_space))
-  _action = env.wm_action_history.flatten(1).detach().cpu()
-  val_mem.append(state.detach().cpu(), -1, 0.0, done)
+  (next_state, next_raw_state), _reward, done, info = env.step(np.random.randint(0, action_space))
+  # _action = env.wm_action_history.flatten(1).detach().cpu()
+  
+  val_mem.append(state.detach().cpu(), raw_state.detach().cpu(), -1, 0.0, done, info)
+  
   state = next_state
+  raw_state = next_raw_state
   T += 1
 
 if args.evaluate:
@@ -149,19 +152,21 @@ else:
   done = True
   for T in trange(1, args.T_max + 1):
     if done:
-      state = env.reset()
+      (state, raw_state), info = env.reset()
 
     if T % args.replay_frequency == 0:
       dqn.reset_noise()  # Draw a new set of noisy weights
 
-    action = dqn.act(state)  # Choose an action greedily (with noisy weights)
-    next_state, reward, done, info = env.step(action)  # Step
-    action = info["action"]
+    action = dqn.act(state)  # Choose an action greedily (with noisy weights) # discrete action
+    (next_state,next_raw_state), reward, done, info = env.step(action)  # Step
+    
     if args.reward_clip > 0:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
     
-    action = env.wm_action_history.flatten(1).detach().cpu()
-    mem.append(state.detach().cpu(), action, reward, done)  # Append transition to memory
+    # state: (512+1536,) -- encoder_state: (512,); wmfeat: (1536,)
+    # next_state: (512+1536,) -- next_encoder_state: (512,); next_wmfeat: (1536,)
+    
+    mem.append(state.detach().cpu(), raw_state.detach().cpu(), action, reward, done, info)# Append transition to memory
 
     # Train and test
     if T >= args.learn_start:

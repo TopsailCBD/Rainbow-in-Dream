@@ -64,11 +64,12 @@ class DreamerWrapper:
     # self.wm_config = parser.parse_args()
     defaults["headless"] = headless
     defaults["sim_device"] = sim_device
+    defaults["num_actions"] = self.num_actions * self.update_interval
     self.wm_config = AttrDict(defaults)
     
     # allow world model and env & alg on different device
     # self.wm_config.device = self.wm_config.sim_device
-    self.wm_config.num_actions = self.wm_config.num_actions * self.update_interval
+    # self.wm_config.num_actions = self._env.num_actions * self.update_interval
     # prop_dim = self.env.num_obs - self.env.privileged_dim - self.env.height_dim - self.env.num_actions
     # image_shape = self.env.cfg.depth.resized + (1,)
     image_shape = (self._env.window,84,84)
@@ -91,7 +92,7 @@ class DreamerWrapper:
       "image": torch.zeros((1,self._env.window,84,84), device=self._world_model.device),
       "is_first": self.wm_is_first
     }
-    print('In init:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
+    # print('In init:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
 
     # wm_metrics = None
     self.wm_action_history = torch.zeros(size=(self.update_interval, self.num_actions),
@@ -178,44 +179,50 @@ class DreamerWrapper:
   
   def reset(self):
   
-    policy_state =  self._env.reset().unsqueeze(0)
+    info = {}
+  
+    raw_state =  self._env.reset().unsqueeze(0)
+    info["is_first"] = True # calling reset() means that is_first is True
+    
     self.wm_is_first = torch.ones(1)
     self.wm_obs = {
-      "image":policy_state.to(self._world_model.device),
-      "is_first": self.wm_is_first
+      "image":raw_state.to(self._world_model.device),
+      "is_first": torch.ones(1) # self.wm_is_first
     }
-    print('In reset:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
+    # print('In reset:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
     
-    self.wm_action_history = torch.zeros_like(self.wm_action_history)
+    self.wm_action_history = torch.zeros_like(self.wm_action_history) # actuib is -1, obs["is_first"] is True
     
-    policy_feat = self._policy_encoder(policy_state)
-    wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
+    policy_feat = self._policy_encoder(raw_state)
+    wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten().unsqueeze(0))
+    state = torch.cat((policy_feat, wm_feat), dim=1)
     
     # pdb.set_trace()
-    return torch.cat((policy_feat, wm_feat), dim=1)
+    return (state, raw_state), info # (s0,z0)
     
-  def step(self, action):      
+  def step(self, action):
+    
     # get world model input
-    state, reward, done = self._env.step(action)
-    state = state.unsqueeze(0)
+    next_raw_state, reward, done = self._env.step(action)
+    next_raw_state = next_raw_state.unsqueeze(0)
     
     # update world model buffer
-    self.update_wm_buffer(state,action,reward,done)
-    print('In step:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
+    self.update_wm_buffer(next_raw_state,action,reward,done)
+    # print('In step:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
 
-    policy_state = self._policy_encoder(state)
-    wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten(1))
-    policy_state = torch.cat((policy_state, wm_feat), dim=1)
+    next_policy_feat = self._policy_encoder(next_raw_state)
+    next_wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten().unsqueeze(0))
+    next_state = torch.cat((next_policy_feat, next_wm_feat), dim=1)
     
-    # update action history
     info = {}
-    info["is_first"] = self.wm_is_first.item()
-    info["wm_action"] = self.wm_action_history.flatten(1).detach().cpu()
-    info["wm_feat"] = wm_feat.detach().cpu()
+    # update action history
+    info["is_first"] = self.wm_is_first.item() # calling step() means that is_first is True
+    # info["wm_action"] = self.wm_action_history.flatten(1).detach().cpu()
+    # info["wm_feat"] = wm_feat.detach().cpu()
     
     self.global_counter += 1
     # return policy_state, reward, done, info
-    return policy_state, reward, done, info
+    return (next_state,next_raw_state), reward, done, info
   
   def learn_world_model(self, it):
     # Train World Model

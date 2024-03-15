@@ -29,7 +29,7 @@ defaults:
   prefill: 2500
   reward_EMA: True
   # newly added for A1 robot
-  num_actions: 12
+  # num_actions: 12
 #  obs_shape:
 #    {'height': (1), 'image': (64, 64, 3), 'orientations': (14), 'velocity': (9)}
 

@@ -14,7 +14,7 @@ from tqdm import trange
 from agent import Agent, AgentWithWMFeature, AgentWithoutEncoder
 from env import Env
 from memory import ReplayMemory, ReplayMemoryWithInfo
-from test import test
+from test import test, test_with_dreamer_wrapper
 from wrapper import DreamerWrapper
 
 
@@ -186,7 +186,7 @@ else:
         env._policy_encoder.eval()
         env._world_model.eval()
         
-        avg_reward, avg_Q = test(args, T, dqn, val_mem, metrics, results_dir)  # Test
+        avg_reward, avg_Q = test_with_dreamer_wrapper(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
         log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
         
         dqn.train()  # Set DQN (online network) back to training mode

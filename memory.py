@@ -5,13 +5,13 @@ import torch
 import pdb
 
 
-transition_dtype = np.dtype([('timestep', np.int32), ('state', np.uint8, (84, 84)), ('action', np.int32), ('reward', np.float32), ('nonterminal', np.bool_)])
-blank_trans = (0, np.zeros((84, 84), dtype=np.uint8), 0, 0.0, False)
+TRANSITION_DTYPE = np.dtype([('timestep', np.int32), ('state', np.uint8, (84, 84)), ('action', np.int32), ('reward', np.float32), ('nonterminal', np.bool_)])
+BLANK_TRANS = (0, np.zeros((84, 84), dtype=np.uint8), 0, 0.0, False)
 
 
 # Segment tree data structure where parent node values are sum/max of children node values
 class SegmentTree():
-  def __init__(self, size, transition_dtype = transition_dtype, blank_trans = blank_trans):
+  def __init__(self, size, transition_dtype, blank_trans):
     self.index = 0
     self.size = size
     self.full = False  # Used to track actual capacity
@@ -90,7 +90,17 @@ class SegmentTree():
     return self.sum_tree[0]
 
 class ReplayMemory():
-  def __init__(self, args, capacity, transition_dtype = transition_dtype, blank_trans = blank_trans):
+  def __init__(self, args, capacity, transition_dtype=None, blank_trans=None):
+    if transition_dtype is None:
+      self.transition_dtype = TRANSITION_DTYPE
+    else:
+      self.transition_dtype = transition_dtype
+      
+    if blank_trans is None:
+      self.blank_trans = BLANK_TRANS
+    else:
+      self.blank_trans = blank_trans
+      
     self.device = args.device
     self.capacity = capacity
     self.history = args.history_length
@@ -100,7 +110,7 @@ class ReplayMemory():
     self.priority_exponent = args.priority_exponent
     self.t = 0  # Internal episode timestep counter
     self.n_step_scaling = torch.tensor([self.discount ** i for i in range(self.n)], dtype=torch.float32, device=self.device)  # Discount-scaling vector for n-step returns
-    self.transitions = SegmentTree(capacity, transition_dtype, blank_trans)  # Store transitions in a wrap-around cyclic buffer within a sum tree for querying priorities
+    self.transitions = SegmentTree(capacity, self.transition_dtype, self.blank_trans)  # Store transitions in a wrap-around cyclic buffer within a sum tree for querying priorities
 
   # Adds state and action at time t, reward and terminal at time t + 1
   def append(self, state, action, reward, terminal):
@@ -118,7 +128,8 @@ class ReplayMemory():
       blank_mask[:, t] = np.logical_or(blank_mask[:, t + 1], transitions_firsts[:, t + 1]) # True if future frame has timestep 0
     for t in range(self.history, self.history + self.n):  # e.g. 4 5 6
       blank_mask[:, t] = np.logical_or(blank_mask[:, t - 1], transitions_firsts[:, t]) # True if current or past frame has timestep 0
-    transitions[blank_mask] = blank_trans
+    transitions[blank_mask] = self.blank_trans
+    # pdb.set_trace()
     return transitions
 
   # Returns a valid sample from each segment
@@ -173,15 +184,15 @@ class ReplayMemory():
     blank_mask = np.zeros_like(transitions_firsts, dtype=np.bool_)
     for t in reversed(range(self.history - 1)):
       blank_mask[t] = np.logical_or(blank_mask[t + 1], transitions_firsts[t + 1]) # If future frame has timestep 0
-    transitions[blank_mask] = blank_trans
-    state = torch.tensor(transitions['state'], dtype=torch.float32, device=self.device).div_(255)  # Agent will turn into batch
+    transitions[blank_mask] = self.blank_trans
+    state = torch.tensor(np.copy(transitions['state']), dtype=torch.float32, device=self.device).div_(255)  # Agent will turn into batch
     self.current_idx += 1
     return state
 
   next = __next__  # Alias __next__ for Python 2 compatibility
   
 class ReplayMemoryWithInfo(ReplayMemory): 
-  def __init__(self, args, capacity, transition_dtype=transition_dtype, blank_trans=blank_trans):
+  def __init__(self, args, capacity):
     # only affects what is in transition: sampled by 
     self.transition_dtype = np.dtype([
       ('timestep', np.int32), 
@@ -198,13 +209,14 @@ class ReplayMemoryWithInfo(ReplayMemory):
       0, 
       np.zeros((2112,), dtype=np.float32), 
       np.zeros((84, 84), dtype=np.uint8),
-      0, 
-      0.0, 
+      -1, 
+      0.0,
       False,
       False,
       # np.zeros((1536), dtype=np.float32),
       # np.zeros((30), dtype=np.float32),
     )
+    self.update_intervel = 5
     super().__init__(args, capacity, self.transition_dtype, self.blank_trans)
   
   # Adds state and action at time t, reward and terminal at time t + 1
@@ -213,18 +225,20 @@ class ReplayMemoryWithInfo(ReplayMemory):
     self.transitions.append((self.t, state, raw_state, action, reward, not terminal, info["is_first"]), self.transitions.max)  # Store new transition with maximum priority
     self.t = 0 if terminal else self.t + 1  # Start new episodes with t = 0
 
-  # def _get_transitions(self, idxs):
-  #   transition_idxs = np.arange(-self.history + 1, self.n + 1) + np.expand_dims(idxs, axis=1)
-  #   transitions = self.transitions.get(transition_idxs)
-  #   transitions_firsts = transitions['timestep'] == 0
-  #   blank_mask = np.zeros_like(transitions_firsts, dtype=np.bool_)
-  #   for t in range(self.history - 2, -1, -1):  # e.g. 2 1 0
-  #     blank_mask[:, t] = np.logical_or(blank_mask[:, t + 1], transitions_firsts[:, t + 1]) # True if future frame has timestep 0
-  #   for t in range(self.history, self.history + self.n):  # e.g. 4 5 6
-  #     blank_mask[:, t] = np.logical_or(blank_mask[:, t - 1], transitions_firsts[:, t]) # True if current or past frame has timestep 0
-  #   transitions[blank_mask] = blank_trans
-  #   return transitions, transitions_firsts
-    
+  # Return valid states for validation
+  def __next__(self):
+    if self.current_idx == self.capacity:
+      raise StopIteration
+    transitions = self.transitions.data[np.arange(self.current_idx - self.history + 1, self.current_idx + 1)]
+    transitions_firsts = transitions['timestep'] == 0
+    blank_mask = np.zeros_like(transitions_firsts, dtype=np.bool_)
+    for t in reversed(range(self.history - 1)):
+      blank_mask[t] = np.logical_or(blank_mask[t + 1], transitions_firsts[t + 1]) # If future frame has timestep 0
+    transitions[blank_mask] = self.blank_trans
+    state = torch.tensor(np.copy(transitions['state'])[self.history-1], dtype=torch.float32, device=self.device).div_(255)  # Agent will turn into batch
+    self.current_idx += 1
+    return state
+  
   # TODO: return is_first from 'timestep' and ensure action history is correct.
   # Returns a valid sample from each segment
   def _get_samples_from_segments(self, batch_size, p_total):
@@ -239,17 +253,22 @@ class ReplayMemoryWithInfo(ReplayMemory):
     # Retrieve all required transition data (from t - h to t + n)
     transitions = self._get_transitions(idxs)
     # Create un-discretised states and nth next states
+    # pdb.set_trace()
     
     all_raw_states = transitions['rawstate']
-    raw_states = torch.tensor(all_raw_states[:, :self.history], device=self.device, dtype=torch.float32).div_(255)
-    next_raw_states = torch.tensor(all_raw_states[:, self.n:self.n + self.history], device=self.device, dtype=torch.float32).div_(255)
+    raw_states = torch.tensor(np.copy(all_raw_states[:, :self.history]), device=self.device, dtype=torch.float32).div_(255)
+    next_raw_states = torch.tensor(np.copy(all_raw_states[:, self.n:self.n + self.history]), device=self.device, dtype=torch.float32).div_(255)
     
     all_states = transitions['state']
-    states = torch.tensor(all_states[:, :self.history], device=self.device, dtype=torch.float32)
-    next_states = torch.tensor(all_states[:, self.n:self.n + self.history], device=self.device, dtype=torch.float32)
+    states = torch.tensor(np.copy(all_states[:, self.history-1]), device=self.device, dtype=torch.float32)
+    next_states = torch.tensor(np.copy(all_states[:, self.n + self.history-1]), device=self.device, dtype=torch.float32)
     
     # Discrete actions to be used as index
-    actions = torch.tensor(np.copy(transitions['action'][:, self.history - 1]), dtype=torch.int64, device=self.device)
+    # actions = torch.tensor(np.copy(transitions['action'][:, self.history - 1]), dtype=torch.int64, device=self.device)
+    actions = torch.tensor(np.copy(transitions['action']), dtype=torch.int64, device=self.device)
+    # if actions.shape[1] < self.update_intervel:
+    #   actions = torch.cat([torch.ones((actions.shape[0], self.update_intervel - actions.shape[1]), dtype=torch.int64, device=self.device)*(-1), actions], dim=1)
+    
     # Calculate truncated n-step discounted returns R^n = Σ_k=0->n-1 (γ^k)R_t+k+1 (note that invalid nth next states have reward 0)
     rewards = torch.tensor(np.copy(transitions['reward'][:, self.history - 1:-1]), dtype=torch.float32, device=self.device)
     R = torch.matmul(rewards, self.n_step_scaling)
@@ -263,7 +282,7 @@ class ReplayMemoryWithInfo(ReplayMemory):
     # wmactions = torch.tensor(wmactions, dtype=torch.int64, device=self.device)
     
     # wmactions = torch.tensor(np.copy(transitions['wmaction'][:, self.history - 1]), dtype=torch.float32, device=self.device)
-    
+    # pdb.set_trace()
     return probs, idxs, tree_idxs, states, actions, R, next_states, nonterminals, isfirsts, raw_states, next_raw_states
   
 

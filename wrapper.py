@@ -218,10 +218,8 @@ class DreamerWrapper:
     # print('In step:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
 
     next_policy_feat = self._policy_encoder(next_raw_state)
-    try:
-      next_wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten().unsqueeze(0)).to(self._env.device)
-    except:
-      pdb.set_trace()
+    next_wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten().unsqueeze(0)).to(self._env.device)
+
     next_state = torch.cat((next_policy_feat, next_wm_feat), dim=1)
     
     info = {}
@@ -234,35 +232,45 @@ class DreamerWrapper:
     # return policy_state, reward, done, info
     return (next_state,next_raw_state), reward, done, info
   
-  def learn_world_model(self, it):
+  def learn_world_model(self):
     # Train World Model
     # start_time = time.time()
-    
+    # print("Iteration",it,'wm_dataset:',self.step_in_wm_dataset)
+    wm_metrics = {}
     if (self.step_in_wm_dataset > self.wm_config.train_start_steps):
-        wm_metrics = {}
+        
         for i in range(self.wm_config.train_steps_per_iter):
-            p = self.wm_dataset_size / np.sum(self.wm_dataset_size)
-            batch_idx = np.random.choice(range(self.env.num_envs), self.wm_config.batch_size, replace=True,
-                                          p=p)
-            batch_length = min(int(self.wm_dataset_size[batch_idx].min()), self.wm_config.batch_length)
+            # p = self.wm_dataset_size / np.sum(self.wm_dataset_size)
+            # batch_idx = np.random.choice(range(self.env.num_envs), self.wm_config.batch_size, replace=True,
+                                          # p=p)
+            # batch_length = min(int(self.wm_dataset_size[batch_idx].min()), self.wm_config.batch_length)
+            # batch_idx = np.random.choice(range(1), self.wm_config.batch_size, replace=True) # [0]*batch_size
+            batch_length = min(self.wm_dataset_size, self.wm_config.batch_length)
             if (batch_length <= 1):
                 continue  # an error occur about the predict loss if batch_length < 1
-            batch_end_idx = [np.random.randint(batch_length, self.wm_dataset_size[idx] + 1) for idx in batch_idx]
+            # batch_end_idx = [np.random.randint(batch_length, self.wm_dataset_size[idx] + 1) for idx in batch_idx] # [0-64]*batch_size
+            batch_end_idx = [np.random.randint(batch_length, self.wm_dataset_size + 1) for _ in range(self.wm_config.batch_size)]
+            
             batch_data = {}
             for k, v in self.wm_dataset.items():
                 value = []
-                for idx, end_idx in zip(batch_idx, batch_end_idx):
-                    value.append(v[idx, end_idx - batch_length: end_idx])
+                # for idx, end_idx in zip(batch_idx, batch_end_idx):
+                    # value.append(v[idx, end_idx - batch_length: end_idx])
+                for end_idx in batch_end_idx:
+                    value.append(v[end_idx - batch_length: end_idx])
                 value = torch.stack(value)
                 batch_data[k] = value
             is_first = torch.zeros((self.wm_config.batch_size, batch_length))
             is_first[:, 0] = 1
             batch_data["is_first"] = is_first
+            # pdb.set_trace()
             post, context, mets = self._world_model._train(batch_data)
         wm_metrics.update(mets)
         
-        for name, values in wm_metrics.items():
-            self.writer.add_scalar('World_model/' + name, float(np.mean(values)), it)
+    return wm_metrics
+  
+        # for name, values in wm_metrics.items():
+            # self.writer.add_scalar('World_model/' + name, float(np.mean(values)), it)
     # print('train world model time:', time.time() - start_time)
 
   # Uses loss of life as terminal signal

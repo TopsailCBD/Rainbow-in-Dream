@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from tqdm import trange
 
-from agent import Agent, AgentWithWMFeature, AgentWithoutEncoder
+from agent import Agent, AgentWithoutEncoder
 from env import Env
 from memory import ReplayMemory, ReplayMemoryWithInfo
 from test import test, test_with_dreamer_wrapper
@@ -67,6 +67,7 @@ for k, v in vars(args).items():
 results_dir = os.path.join('results', args.id)
 if not os.path.exists(results_dir):
   os.makedirs(results_dir)
+losses = {'steps': []}
 metrics = {'steps': [], 'rewards': [], 'Qs': [], 'best_avg_reward': -float('inf')}
 np.random.seed(args.seed)
 torch.manual_seed(np.random.randint(1, 10000))
@@ -100,6 +101,12 @@ def save_memory(memory, memory_path, disable_bzip):
     with bz2.open(memory_path, 'wb') as zipped_pickle_file:
       pickle.dump(memory, zipped_pickle_file)
 
+def update_metrics(metrics, it_metrics):
+  for name, value in it_metrics.items():
+    if name in metrics:
+      metrics[name].append(value)
+    else:
+      metrics[name] = [value]
 
 # Environment
 env = Env(args)
@@ -175,11 +182,15 @@ else:
       if T % args.replay_frequency == 0: # TODO: test what if policy_encoder and world_model are updated consistently
         env._policy_encoder.train()
         env._world_model.eval()
-        dqn.learn(mem)  # Train with n-step distributional double-Q learning+
+        policy_losses = dqn.learn(mem)  # Train with n-step distributional double-Q learning+
         
         env._policy_encoder.eval()
         env._world_model.train()
-        env.learn_world_model(T)
+        wm_losses = env.learn_world_model()
+        
+        losses['steps'].append(T)
+        update_metrics(losses, policy_losses)
+        update_metrics(losses, wm_losses)
         
       if T % args.evaluation_interval == 0:
         dqn.eval()  # Set DQN (online network) to evaluation mode
@@ -196,6 +207,9 @@ else:
         # If memory path provided, save it
         if args.memory is not None:
           save_memory(mem, args.memory, args.disable_bzip_memory)
+        
+        # Save train metrics
+        torch.save(losses, os.path.join(results_dir, 'losses.pth'))
 
       # Update target network
       if T % args.target_update == 0:

@@ -121,6 +121,7 @@ class WorldModel(nn.Module):
                         preds[name] = pred
                 losses = {}
                 for name, pred in preds.items():
+                    # print(name, type(data[name]),data[name].shape)
                     loss = -pred.log_prob(data[name])
                     assert loss.shape == embed.shape[:2], (name, loss.shape)
                     losses[name] = loss

@@ -10,6 +10,8 @@ import atari_py
 import numpy as np
 import torch
 from tqdm import trange
+import gtimer as gt
+import pdb
 
 from agent import Agent, AgentWithoutEncoder
 from env import Env
@@ -67,7 +69,7 @@ for k, v in vars(args).items():
 results_dir = os.path.join('results', args.id)
 if not os.path.exists(results_dir):
   os.makedirs(results_dir)
-losses = {'steps': []}
+losses = {'steps': [], 'wm_steps': []}
 metrics = {'steps': [], 'rewards': [], 'Qs': [], 'best_avg_reward': -float('inf')}
 np.random.seed(args.seed)
 torch.manual_seed(np.random.randint(1, 10000))
@@ -157,7 +159,7 @@ else:
   # Training loop
   dqn.train()
   done = True
-  for T in trange(1, args.T_max + 1):
+  for T in gt.timed_for(trange(1, args.T_max + 1),save_itrs=True):
     if done:
       (state, raw_state), info = env.reset()
 
@@ -165,7 +167,9 @@ else:
       dqn.reset_noise()  # Draw a new set of noisy weights
 
     action = dqn.act(state)  # Choose an action greedily (with noisy weights) # discrete action
+    gt.stamp('action chosen')
     (next_state,next_raw_state), reward, done, info = env.step(action)  # Step
+    gt.stamp('step taken')
     
     if args.reward_clip > 0:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
@@ -174,7 +178,8 @@ else:
     # next_state: (512+1536,) -- next_encoder_state: (512,); next_wmfeat: (1536,)
     
     mem.append(state.detach().cpu(), raw_state.detach().cpu(), action, reward, done, info)# Append transition to memory
-
+    gt.stamp('memory appended')
+    
     # Train and test
     if T >= args.learn_start:
       mem.priority_weight = min(mem.priority_weight + priority_weight_increase, 1)  # Anneal importance sampling weight β to 1
@@ -184,13 +189,26 @@ else:
         env._world_model.eval()
         policy_losses = dqn.learn(mem)  # Train with n-step distributional double-Q learning+
         
+        losses['steps'].append(T)
+        update_metrics(losses, policy_losses)
+        
+        gt.stamp('dqn updated')
+        
+      if T % env.action_history_length == 0:
         env._policy_encoder.eval()
         env._world_model.train()
         wm_losses = env.learn_world_model()
         
-        losses['steps'].append(T)
-        update_metrics(losses, policy_losses)
+        losses['wm_steps'].append(T)
         update_metrics(losses, wm_losses)
+        
+        gt.stamp('wm updated')
+        
+        
+      if T == 2000:
+        print(gt.report(include_itrs=False))
+        pdb.set_trace()
+      
         
       if T % args.evaluation_interval == 0:
         dqn.eval()  # Set DQN (online network) to evaluation mode

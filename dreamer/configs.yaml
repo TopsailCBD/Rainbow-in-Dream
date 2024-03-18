@@ -98,3 +98,21 @@ defaults:
   disag_layers: 4
   disag_units: 400
   disag_action_cond: False
+
+atari100k:
+  steps: 4e5
+  envs: 1
+  action_repeat: 4
+  train_ratio: 1024
+  video_pred_log: true
+  eval_episode_num: 100
+  actor_dist: 'onehot'
+  imag_gradient: 'reinforce'
+  stickey: False
+  lives: unused
+  noops: 30
+  resize: opencv
+  actions: needed
+  time_limit: 108000
+  train_steps_per_iter: 1
+  batch_size: 32

@@ -10,6 +10,7 @@ import pdb
 import sys
 import pathlib
 import ruamel.yaml as yaml
+import gtimer as gt
 
 # import argparse
 from attrdict import AttrDict
@@ -30,7 +31,7 @@ class DreamerWrapper:
     # else:
     #   self.wrapper_args = WrapperCfg()
     self.num_actions = self._env.action_space()
-    self.action_history_length = self._env.window - 1
+    self.action_history_length = self._env.window - 1 # also as update interval
     self.global_counter = 0
     self._build_world_model()
     self._policy_encoder = AtariEncoder(args).to(self._env.device) # TODO: Test what if using the same encoder as dreamer
@@ -51,7 +52,7 @@ class DreamerWrapper:
             else:
                 base[key] = value
 
-    name_list = ["defaults"]
+    name_list = ["defaults", "atari100k"]
     defaults = {}
     for name in name_list:
         recursive_update(defaults, configs[name])
@@ -103,7 +104,7 @@ class DreamerWrapper:
     # wm_feature = torch.zeros((self.wm_feature_dim))
 
     max_episode_length = self._env.ale.getInt('max_num_frames_per_episode') # NOTE: change by _env
-    wm_dataset_length = int(max_episode_length / self.action_history_length) + 3
+    wm_dataset_length = int(max_episode_length / self._env.window / self.action_history_length) + 3
     
     self.wm_dataset = {
         "image": torch.zeros((wm_dataset_length, self._env.window, 84,84), device=self._world_model.device),
@@ -206,19 +207,25 @@ class DreamerWrapper:
     state = torch.cat((policy_feat, wm_feat), dim=1)
     
     return (state, raw_state), info # (s0,z0)
-    
+  
+  @gt.wrap
   def step(self, action):
     
     # get world model input
     next_raw_state, reward, done = self._env.step(action)
     next_raw_state = next_raw_state.unsqueeze(0).to(self._env.device)
+    gt.stamp('STEP: env_step')
     
     # update world model buffer
     self.update_wm_buffer(next_raw_state,action,reward,done)
     # print('In step:', 'image', self.wm_obs["image"].shape, 'is_first', self.wm_obs["is_first"])
+    gt.stamp('STEP: update_buffer')
 
     next_policy_feat = self._policy_encoder(next_raw_state)
+    gt.stamp('STEP: get_policy_feat')
+    
     next_wm_feat = self._get_world_model_feat(self.wm_obs, self.wm_action_history.flatten().unsqueeze(0)).to(self._env.device)
+    gt.stamp('STEP: get_wm_feat')
 
     next_state = torch.cat((next_policy_feat, next_wm_feat), dim=1)
     
@@ -232,6 +239,7 @@ class DreamerWrapper:
     # return policy_state, reward, done, info
     return (next_state,next_raw_state), reward, done, info
   
+  @gt.wrap
   def learn_world_model(self):
     # Train World Model
     # start_time = time.time()
@@ -239,7 +247,7 @@ class DreamerWrapper:
     wm_metrics = {}
     if (self.step_in_wm_dataset > self.wm_config.train_start_steps):
         
-        for i in range(self.wm_config.train_steps_per_iter):
+        for i in gt.timed_for(range(self.wm_config.train_steps_per_iter)):
             # p = self.wm_dataset_size / np.sum(self.wm_dataset_size)
             # batch_idx = np.random.choice(range(self.env.num_envs), self.wm_config.batch_size, replace=True,
                                           # p=p)
@@ -263,8 +271,10 @@ class DreamerWrapper:
             is_first = torch.zeros((self.wm_config.batch_size, batch_length))
             is_first[:, 0] = 1
             batch_data["is_first"] = is_first
+            gt.stamp('LEARN_WM: sample_batch')
             # pdb.set_trace()
             post, context, mets = self._world_model._train(batch_data)
+            gt.stamp('LEARN_WM: train_wm')
         wm_metrics.update(mets)
         
     return wm_metrics

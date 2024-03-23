@@ -23,7 +23,7 @@ from dreamer import tools
   
 
 class DreamerWrapper:
-  def __init__(self, env:Env, args):
+  def __init__(self, env:Env, args, evaluate=False):
     
     self._env = env
     # if wrapper_args:
@@ -32,10 +32,17 @@ class DreamerWrapper:
     #   self.wrapper_args = WrapperCfg()
     self.num_actions = self._env.action_space()
     self.action_history_length = self._env.window - 1 # also as update interval
+    self.wm_feature_out_dim = 1
     self.global_counter = 0
+    self.noop = True
+    
+    self.env_for_evaluate = evaluate
+    
     self._build_world_model()
     self._policy_encoder = AtariEncoder(args).to(self._env.device) # TODO: Test what if using the same encoder as dreamer
     self._init_world_model_dataset()
+    self._wm_feature_encoder = WMFeatureEncoder(self.wm_feature_dim, self.wm_feature_out_dim).to(self._env.device)
+    
     
   def _build_world_model(self,headless=True,sim_device='cuda:0'):
     # TODO: use dreamer_args in this function.
@@ -73,8 +80,8 @@ class DreamerWrapper:
     # self.wm_config.num_actions = self._env.num_actions * self.action_history_length
     # prop_dim = self.env.num_obs - self.env.privileged_dim - self.env.height_dim - self.env.num_actions
     # image_shape = self.env.cfg.depth.resized + (1,)
-    image_shape = (self._env.window,84,84)
-    obs_shape = {'image': image_shape}
+    self.image_shape = (self._env.window,84,84)
+    obs_shape = {'image': self.image_shape}
 
     self._world_model = WorldModel(self.wm_config, obs_shape, use_camera=True)
     self._world_model = self._world_model.to(self._world_model.device)
@@ -87,8 +94,6 @@ class DreamerWrapper:
 
   def _init_world_model_dataset(self):
     # init world model input
-    self.step_in_wm_dataset = 0
-    
     self.wm_is_first = torch.ones((1,1),device=self._world_model.device)
     
     self.wm_obs = {
@@ -102,7 +107,11 @@ class DreamerWrapper:
                                     device=self._world_model.device)
     # wm_reward = torch.zeros(self.env.num_envs, device=self._world_model.device)
     # wm_feature = torch.zeros((self.wm_feature_dim))
-
+    if self.env_for_evaluate:
+      return
+    
+    self.step_in_wm_dataset = 0
+    
     max_episode_length = self._env.ale.getInt('max_num_frames_per_episode') # NOTE: change by _env
     wm_dataset_length = int(max_episode_length / self._env.window / self.action_history_length) + 3
     
@@ -149,12 +158,18 @@ class DreamerWrapper:
                                                         wm_obs["is_first"])
     wm_feature = self._world_model.dynamics.get_feat(wm_latent)
     
+    if self.noop:
+      wm_feature_encoded = torch.zeros((wm_feature.shape[0],self.wm_feature_out_dim), device=self._env.device)
+    else:
+      wm_feature_encoded = self._wm_feature_encoder(wm_feature)
+    
     if inference:
       pass
     else:
       self.wm_latent = wm_latent
     # wm_is_first[:] = 0
-    return wm_feature.to(self._env.device)
+    
+    return wm_feature_encoded.to(self._env.device)
   
   def update_wm_buffer(self,state,action,reward,done):
     self.wm_obs = {
@@ -167,6 +182,9 @@ class DreamerWrapper:
           (self.wm_action_history[1:], action.unsqueeze(0)), dim=0)
     
     self.wm_is_first = torch.zeros((1,1), device=self._world_model.device)
+    
+    if self.env_for_evaluate:
+      return
     
     # pdb.set_trace()
     self.wm_buffer["image"][self.wm_buffer_index] = state
@@ -245,6 +263,10 @@ class DreamerWrapper:
     # start_time = time.time()
     # print("Iteration",it,'wm_dataset:',self.step_in_wm_dataset)
     wm_metrics = {}
+    if self.noop:
+      return wm_metrics
+    
+    
     if (self.step_in_wm_dataset > self.wm_config.train_start_steps):
         
         for i in gt.timed_for(range(self.wm_config.train_steps_per_iter)):

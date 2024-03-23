@@ -73,6 +73,7 @@ class Agent():
   def learn(self, mem):
     # Sample transitions
     idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
+    policy_metrics = {}
 
     # Calculate current state probabilities (online network noise already sampled)
     log_ps = self.online_net(states, log=True)  # Log probabilities log p(s_t, ·; θonline)
@@ -111,6 +112,12 @@ class Agent():
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
 
+    policy_metrics['loss'] = loss.mean().item()
+    policy_metrics['weights'] = weights.mean().item()
+    policy_metrics['log_ps_a'] = log_ps_a.mean().item()
+  
+    return policy_metrics
+
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
 
@@ -133,10 +140,14 @@ class AgentWithoutEncoder(Agent):
   def __init__(self, args, env):
     self.env = env
     super().__init__(args, env)
-    self._use_sampled_feature = True # False
+    self.optimiser = optim.Adam([
+      {'params': self.online_net.parameters()},
+      {'params': self.env._policy_encoder.parameters()},
+      {'params': self.env._wm_feature_encoder.parameters()}
+      ], lr=args.learning_rate, eps=args.adam_eps)
     
   def _build_online_net(self, args):
-    self.online_net = DQNWithoutEncoder(args, self.action_space, self.env.wm_feature_dim).to(device=args.device)
+    self.online_net = DQNWithoutEncoder(args, self.action_space, self.env.wm_feature_out_dim).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
         state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
@@ -151,7 +162,7 @@ class AgentWithoutEncoder(Agent):
 
     self.online_net.train()
 
-    self.target_net = DQNWithoutEncoder(args, self.action_space, self.env.wm_feature_dim).to(device=args.device)
+    self.target_net = DQNWithoutEncoder(args, self.action_space, self.env.wm_feature_out_dim).to(device=args.device)
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
@@ -165,7 +176,7 @@ class AgentWithoutEncoder(Agent):
     
     policy_metrics = {}
     
-    if not self._use_sampled_feature:
+    if not self.env.wm_config.use_sampled_feature:
       wm_obs = {
         "image": raw_states,
         "is_first": firsts # BUG: firsts is wrong for some case
@@ -232,9 +243,16 @@ class AgentWithoutEncoder(Agent):
       
 
     loss = -torch.sum(m * log_ps_a, 1)  # Cross-entropy loss (minimises DKL(m||p(s_t, a_t)))
+    
     self.online_net.zero_grad()
+    self.env._policy_encoder.zero_grad()
+    self.env._wm_feature_encoder.zero_grad()
+    
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
+    
     clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    clip_grad_norm_(self.env._policy_encoder.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    clip_grad_norm_(self.env._wm_feature_encoder.parameters(), self.norm_clip)  # Clip gradients by L2 norm
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions

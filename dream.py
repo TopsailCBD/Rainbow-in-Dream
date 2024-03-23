@@ -16,7 +16,7 @@ import pdb
 from agent import Agent, AgentWithoutEncoder
 from env import Env
 from memory import ReplayMemory, ReplayMemoryWithInfo
-from test import test, test_with_dreamer_wrapper
+from test import *
 from wrapper import DreamerWrapper
 
 
@@ -120,6 +120,10 @@ action_space = env.action_space()
 # Agent
 dqn = AgentWithoutEncoder(args, env)
 
+# Memory Args
+args.__setattr__('mem_state_dim', (env._policy_encoder.conv_output_size + env._wm_feature_encoder.out_dim,))
+args.__setattr__('mem_raw_state_dim', env.image_shape[1:])
+
 # If a model is provided, and evaluate is false, presumably we want to resume, so try to load memory
 if args.model is not None and not args.evaluate:
   if not args.memory:
@@ -133,6 +137,7 @@ else:
   mem = ReplayMemoryWithInfo(args, args.memory_capacity)
 
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
+
 
 
 # Construct validation memory
@@ -192,6 +197,8 @@ else:
         losses['steps'].append(T)
         update_metrics(losses, policy_losses)
         
+        env._world_model.train()
+        
         gt.stamp('dqn updated')
         
       if T % env.action_history_length == 0:
@@ -202,20 +209,28 @@ else:
         losses['wm_steps'].append(T)
         update_metrics(losses, wm_losses)
         
+        env._policy_encoder.train()
+        
         gt.stamp('wm updated')
         
         
-      if T == 2000:
-        print(gt.report(include_itrs=False))
-        pdb.set_trace()
+      # if T == 2000:
+      #   print(gt.report(include_itrs=False))
+      #   pdb.set_trace()
       
-        
+      # test_image = torch.ones((1, 4, 84, 84), dtype=torch.float32, device=args.device)
+      # print(env._policy_encoder(test_image))
+      # pdb.set_trace()
+      
+      # print('At step:', T, 'policy encoder training:', env._policy_encoder.training, 'world model training:', env._world_model.training)
+      
       if T % args.evaluation_interval == 0:
         dqn.eval()  # Set DQN (online network) to evaluation mode
         env._policy_encoder.eval()
         env._world_model.eval()
         
         avg_reward, avg_Q = test_with_dreamer_wrapper(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
+        avg_reward, avg_Q = test_with_new_env(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
         log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
         
         dqn.train()  # Set DQN (online network) back to training mode

@@ -114,5 +114,6 @@ atari100k:
   resize: opencv
   actions: needed
   time_limit: 108000
-  train_steps_per_iter: 1
+  train_steps_per_iter: 10
   batch_size: 32
+  use_sampled_feature: false

@@ -196,25 +196,21 @@ class ReplayMemoryWithInfo(ReplayMemory):
     # only affects what is in transition: sampled by 
     self.transition_dtype = np.dtype([
       ('timestep', np.int32), 
-      ('state', np.float32, (2112,)), 
-      ('rawstate', np.uint8, (84, 84)),
+      ('state', np.float32, args.mem_state_dim), 
+      ('rawstate', np.uint8, args.mem_raw_state_dim),
       ('action', np.int32), 
       ('reward', np.float32), 
       ('nonterminal', np.bool_), 
       ("isfirst", np.bool_), 
-      # ("wmfeature", np.float32, (1536,)),
-      # ("wmaction", np.float32, (30,)),
       ],)
     self.blank_trans = (
       0, 
-      np.zeros((2112,), dtype=np.float32), 
-      np.zeros((84, 84), dtype=np.uint8),
+      np.zeros(args.mem_state_dim, dtype=np.float32), 
+      np.zeros(args.mem_raw_state_dim, dtype=np.uint8),
       -1, 
       0.0,
       False,
       False,
-      # np.zeros((1536), dtype=np.float32),
-      # np.zeros((30), dtype=np.float32),
     )
     self.update_intervel = 5
     super().__init__(args, capacity, self.transition_dtype, self.blank_trans)

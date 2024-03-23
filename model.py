@@ -182,3 +182,14 @@ class DQNWithWMFeature(nn.Module):
       if 'fc' in name:
         module.reset_noise()
         
+class WMFeatureEncoder(nn.Module):
+  def __init__(self, wm_feature_dim, out_dim) -> None:
+    super().__init__()
+    self.wm_feature_dim = wm_feature_dim
+    self.out_dim = out_dim
+    self.fc = nn.Linear(wm_feature_dim, out_dim)
+    
+  def forward(self, x):
+    x = self.fc(x)
+    return x
+        

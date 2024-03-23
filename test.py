@@ -109,6 +109,60 @@ def test_with_dreamer_wrapper(use_env, args, T, dqn, val_mem, metrics, results_d
   # Return average reward and Q-value
   return avg_reward, avg_Q
 
+# Test DQN
+def test_with_new_env(train_env, args, T, dqn, val_mem, metrics, results_dir, evaluate=False):
+  env = DreamerWrapper(train_env._env, args, evaluate=True)
+  env._world_model.load_state_dict(train_env._world_model.state_dict())
+  env._policy_encoder.load_state_dict(train_env._policy_encoder.state_dict())
+  env._wm_feature_encoder.load_state_dict(train_env._wm_feature_encoder.state_dict())
+  
+  env.eval()
+  metrics['steps'].append(T)
+  T_rewards, T_Qs = [], []
+
+  # Test performance over several episodes
+  done = True
+  for _ in range(args.evaluation_episodes):
+    while True:
+      if done:
+        (state,raw_state), info = env.reset()
+        reward_sum = 0
+        done = False
+
+      action = dqn.act_e_greedy(state)  # Choose an action ε-greedily
+      (state,raw_state), reward, done, info = env.step(action)  # Step
+      reward_sum += reward
+      if args.render:
+        env.render()
+
+      if done:
+        T_rewards.append(reward_sum)
+        break
+  env.close()
+
+  # Test Q-values over validation memory
+  for state in val_mem:  # Iterate over valid states
+    T_Qs.append(dqn.evaluate_q(state))
+
+  avg_reward, avg_Q = sum(T_rewards) / len(T_rewards), sum(T_Qs) / len(T_Qs)
+  if not evaluate:
+    # Save model parameters if improved
+    if avg_reward > metrics['best_avg_reward']:
+      metrics['best_avg_reward'] = avg_reward
+      dqn.save(results_dir)
+
+    # Append to results and save metrics
+    metrics['rewards'].append(T_rewards)
+    metrics['Qs'].append(T_Qs)
+    torch.save(metrics, os.path.join(results_dir, 'metrics.pth'))
+
+    # Plot
+    _plot_line(metrics['steps'], metrics['rewards'], 'Reward', path=results_dir)
+    _plot_line(metrics['steps'], metrics['Qs'], 'Q', path=results_dir)
+
+  # Return average reward and Q-value
+  return avg_reward, avg_Q
+
 # Plots min, max and mean + standard deviation bars of a population over time
 def _plot_line(xs, ys_population, title, path=''):
   max_colour, mean_colour, std_colour, transparent = 'rgb(0, 132, 180)', 'rgb(0, 172, 237)', 'rgba(29, 202, 255, 0.2)', 'rgba(0, 0, 0, 0)'

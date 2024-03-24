@@ -307,12 +307,12 @@ class DreamerWrapper:
 
   # Uses loss of life as terminal signal
   def train(self):
-    self.training = True
+    self._env.train()
     self._world_model.train()
 
   # Uses standard terminal signal
   def eval(self):
-    self.training = False
+    self._env.eval()
     self._world_model.eval()
 
   def action_space(self):

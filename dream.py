@@ -185,33 +185,42 @@ else:
     mem.append(state.detach().cpu(), raw_state.detach().cpu(), action, reward, done, info)# Append transition to memory
     gt.stamp('memory appended')
     
+    if T == 100:
+      dqn.eval()  # Set DQN (online network) to evaluation mode
+      # env._policy_encoder.eval()
+      # env._world_model.eval()
+      
+      avg_reward, avg_Q = test_with_dreamer_wrapper(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
+      # avg_reward, avg_Q = test_with_new_env(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
+      log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
+    
     # Train and test
     if T >= args.learn_start:
       mem.priority_weight = min(mem.priority_weight + priority_weight_increase, 1)  # Anneal importance sampling weight β to 1
 
       if T % args.replay_frequency == 0: # TODO: test what if policy_encoder and world_model are updated consistently
-        env._policy_encoder.train()
-        env._world_model.eval()
+        # env._policy_encoder.train()
+        # env._world_model.eval()
         policy_losses = dqn.learn(mem)  # Train with n-step distributional double-Q learning+
         
         losses['steps'].append(T)
         update_metrics(losses, policy_losses)
         
-        env._world_model.train()
+        # env._world_model.train()
         
         gt.stamp('dqn updated')
         
-      if T % env.action_history_length == 0:
-        env._policy_encoder.eval()
-        env._world_model.train()
-        wm_losses = env.learn_world_model()
+      # if T % env.action_history_length == 0:
+      #   env._policy_encoder.eval()
+      #   env._world_model.train()
+      #   wm_losses = env.learn_world_model()
         
-        losses['wm_steps'].append(T)
-        update_metrics(losses, wm_losses)
+      #   losses['wm_steps'].append(T)
+      #   update_metrics(losses, wm_losses)
         
-        env._policy_encoder.train()
+      #   env._policy_encoder.train()
         
-        gt.stamp('wm updated')
+      #   gt.stamp('wm updated')
         
         
       # if T == 2000:
@@ -220,17 +229,19 @@ else:
       
       # test_image = torch.ones((1, 4, 84, 84), dtype=torch.float32, device=args.device)
       # print(env._policy_encoder(test_image))
+      # test_wm_feat = torch.ones((1,1536),dtype=torch.float32,device=args.device)
+      # print(env._wm_feature_encoder(test_wm_feat))
       # pdb.set_trace()
       
       # print('At step:', T, 'policy encoder training:', env._policy_encoder.training, 'world model training:', env._world_model.training)
       
       if T % args.evaluation_interval == 0:
         dqn.eval()  # Set DQN (online network) to evaluation mode
-        env._policy_encoder.eval()
-        env._world_model.eval()
+        # env._policy_encoder.eval()
+        # env._world_model.eval()
         
         avg_reward, avg_Q = test_with_dreamer_wrapper(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
-        avg_reward, avg_Q = test_with_new_env(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
+        # avg_reward, avg_Q = test_with_new_env(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
         log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
         
         dqn.train()  # Set DQN (online network) back to training mode

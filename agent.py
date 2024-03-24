@@ -174,6 +174,17 @@ class AgentWithoutEncoder(Agent):
     # wm_actions is action history.
     idxs, states, actions, returns, next_states, nonterminals, weights, firsts, raw_states, next_raw_states = mem.sample(self.batch_size)
     
+    # TODO: change memory buffer to this format
+    ### What is in the memory buffer ###
+    # idx: (B,) int
+    # states / next_states: (B,4,84,84)
+    # actions: (B,) int
+    # returns, nonterminals, weights, firsts: pass
+    # wm_latents / next_wm_latent: (B,self.env._wm_latent_dim) # TODO: does env has this attribute?
+    # idxs, states, actions, returns, next_states, nonterminals, weights, firsts, wm_latents, next_wm_latents = mem.sample(self.batch_size)
+    
+    # TODO: DO NOT use state and next_state in training dqn and encoders.
+    
     policy_metrics = {}
     
     if not self.env.wm_config.use_sampled_feature:
@@ -188,7 +199,9 @@ class AgentWithoutEncoder(Agent):
       wm_actions = self.discrete_to_one_hot_action(indexed_actions).flatten(1)
       
       feat = self.env._get_world_model_feat(wm_obs, wm_actions, inference=True)
-      embed = states[:,:576]
+      
+      embed = self.env._policy_encoder(raw_states)
+      # embed = states[:,:576]
       # pdb.set_trace()
       states = torch.cat((embed, feat), dim=1)
       
@@ -202,7 +215,8 @@ class AgentWithoutEncoder(Agent):
       next_wm_actions = self.discrete_to_one_hot_action(next_indexed_actions).flatten(1)
       
       next_feat = self.env._get_world_model_feat(next_wm_obs, next_wm_actions, inference=True)
-      next_embed = next_states[:,:576]
+      # next_embed = next_states[:,:576]
+      next_embed = self.env._policy_encoder(next_raw_states)
       next_states = torch.cat((next_embed, next_feat), dim=1)
     
     
@@ -264,6 +278,21 @@ class AgentWithoutEncoder(Agent):
   
     return policy_metrics
   
+  def get_q_net_state(self, raw_state, wm_action, wm_is_first, wm_latent=None, squeeze=True):
+    # raw_state: (batch_size, 4, 84, 84)
+    
+    with torch.no_grad():
+      embed = self.env._policy_encoder(raw_state)
+      feat = self.env._get_world_model_feat(
+        {"image": raw_state, "is_first": wm_is_first},
+        wm_action, inference=True)
+      state = torch.cat((embed, feat), dim=1)
+      
+      if squeeze:
+        assert state.shape[0] == 1
+        state = state.squeeze(0)
+             
+    return state
     
   def discrete_to_one_hot_action(self,discrete_action):
     """

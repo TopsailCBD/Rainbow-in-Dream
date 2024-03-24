@@ -165,6 +165,15 @@ else:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
     mem.append(state, action, reward, done)  # Append transition to memory
 
+    if T == 100:
+      dqn.eval()  # Set DQN (online network) to evaluation mode
+      # env._policy_encoder.eval()
+      # env._world_model.eval()
+      
+      avg_reward, avg_Q = test(args, T, dqn, val_mem, metrics, results_dir)  # Test
+      # avg_reward, avg_Q = test_with_new_env(env, args, T, dqn, val_mem, metrics, results_dir)  # Test
+      log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
+      
     # Train and test
     if T >= args.learn_start:
       mem.priority_weight = min(mem.priority_weight + priority_weight_increase, 1)  # Anneal importance sampling weight β to 1

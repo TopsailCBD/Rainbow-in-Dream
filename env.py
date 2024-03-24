@@ -70,6 +70,7 @@ class Env():
     if self.training:
       lives = self.ale.lives()
       if lives < self.lives and lives > 0:  # Lives > 0 for Q*bert
+        # print('Traing mode, revive',lives,self.lives)
         self.life_termination = not done  # Only set flag when not truly done
         done = True
       self.lives = lives

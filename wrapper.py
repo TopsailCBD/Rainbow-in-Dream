@@ -31,10 +31,11 @@ class DreamerWrapper:
     # else:
     #   self.wrapper_args = WrapperCfg()
     self.num_actions = self._env.action_space()
-    self.action_history_length = self._env.window - 1 # also as update interval
-    self.wm_feature_out_dim = 1
+    self.action_history_length = self._env.window - 1 
+    self.wm_update_interval = self.action_history_length * 10
+    self.wm_feature_out_dim = 128
     self.global_counter = 0
-    self.noop = True
+    self.noop = False
     
     self.env_for_evaluate = evaluate
     
@@ -113,7 +114,7 @@ class DreamerWrapper:
     self.step_in_wm_dataset = 0
     
     max_episode_length = self._env.ale.getInt('max_num_frames_per_episode') # NOTE: change by _env
-    wm_dataset_length = int(max_episode_length / self._env.window / self.action_history_length) + 3
+    wm_dataset_length = int(max_episode_length / self.action_history_length) + 3
     
     self.wm_dataset = {
         "image": torch.zeros((wm_dataset_length, self._env.window, 84,84), device=self._world_model.device),

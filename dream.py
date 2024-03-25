@@ -147,13 +147,14 @@ while T < args.evaluation_size:
   if done:
     (state,raw_state), info = env.reset()
 
-  (next_state, next_raw_state), _reward, done, info = env.step(np.random.randint(0, action_space))
+  (next_state, next_raw_state), _reward, done, next_info = env.step(np.random.randint(0, action_space))
   # _action = env.wm_action_history.flatten(1).detach().cpu()
   
   val_mem.append(state.detach().cpu(), raw_state.detach().cpu(), -1, 0.0, done, info)
   
   state = next_state
   raw_state = next_raw_state
+  info = next_info
   T += 1
 
 if args.evaluate:
@@ -173,7 +174,7 @@ else:
 
     action = dqn.act(state)  # Choose an action greedily (with noisy weights) # discrete action
     gt.stamp('action chosen')
-    (next_state,next_raw_state), reward, done, info = env.step(action)  # Step
+    (next_state,next_raw_state), reward, done, next_info = env.step(action)  # Step
     gt.stamp('step taken')
     
     if args.reward_clip > 0:
@@ -210,17 +211,17 @@ else:
         
         gt.stamp('dqn updated')
         
-      # if T % env.action_history_length == 0:
-      #   env._policy_encoder.eval()
-      #   env._world_model.train()
-      #   wm_losses = env.learn_world_model()
+      if T % env.wm_update_interval == 0:
+        env._policy_encoder.eval()
+        env._world_model.train()
+        wm_losses = env.learn_world_model()
         
-      #   losses['wm_steps'].append(T)
-      #   update_metrics(losses, wm_losses)
+        losses['wm_steps'].append(T)
+        update_metrics(losses, wm_losses)
         
-      #   env._policy_encoder.train()
+        env._policy_encoder.train()
         
-      #   gt.stamp('wm updated')
+        gt.stamp('wm updated')
         
         
       # if T == 2000:
@@ -264,5 +265,7 @@ else:
         dqn.save(results_dir, 'checkpoint.pth')
 
     state = next_state
+    raw_state = next_raw_state
+    info = next_info
 
 env.close()
